@@ -11,7 +11,11 @@ dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: "https://medhelp-2a762.web.app",
+  })
+);
 app.use(express.json());
 
 // Routes
