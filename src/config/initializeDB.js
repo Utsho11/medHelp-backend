@@ -1,12 +1,12 @@
 import { generateId } from "../utils/generateId.js";
 import bcrypt from "bcrypt";
-import dotenv from "dotenv";
+import config from "./index.js";
 import pool from "./db.js";
-dotenv.config();
+
 // Create Users Table and Seed Admin
 export const initializeDB = async () => {
   try {
-    // Create the users table if not exists
+    // 1. Users Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id VARCHAR(100) NOT NULL PRIMARY KEY,
@@ -15,7 +15,7 @@ export const initializeDB = async () => {
         email VARCHAR(100) NOT NULL,
         age INT CHECK (age >= 0),
         gender ENUM('Male', 'Female', 'Other') NOT NULL,
-        phone VARCHAR(15) NOT NULL,
+        phone VARCHAR(20) NOT NULL,
         address VARCHAR(255) NOT NULL,
         role ENUM('patient', 'admin', 'volunteer') NOT NULL,
         password VARCHAR(255) NOT NULL,
@@ -26,6 +26,7 @@ export const initializeDB = async () => {
     `);
     console.log("✅ Users table created or already exists.");
 
+    // 2. Volunteer Availability Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS volunteer_availability (
         volunteer_id VARCHAR(100) PRIMARY KEY,
@@ -34,11 +35,11 @@ export const initializeDB = async () => {
         longitude DECIMAL(10, 6),
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (volunteer_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    
-        `);
+      );
+    `);
     console.log("✅ Volunteer_availability table created or already exists.");
 
+    // 3. Trainers Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS trainers (
         id VARCHAR(100) NOT NULL PRIMARY KEY,
@@ -54,6 +55,7 @@ export const initializeDB = async () => {
     `);
     console.log("✅ Trainers table created or already exists.");
 
+    // 4. Courses Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS courses (
         id VARCHAR(100) NOT NULL PRIMARY KEY,
@@ -67,21 +69,21 @@ export const initializeDB = async () => {
     `);
     console.log("✅ Courses table created or already exists.");
 
+    // 5. Enrollments Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS enrollments (
-        id  VARCHAR(100) NOT NULL PRIMARY KEY,
+        id VARCHAR(100) NOT NULL PRIMARY KEY,
         course_id VARCHAR(100) NOT NULL,
         student_id VARCHAR(100) NOT NULL,
         enrollment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        
         FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
         FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
-        
         UNIQUE (course_id, student_id)
       );
     `);
     console.log("✅ Enrollments table created or already exists.");
 
+    // 6. Helps Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS helps (
         id VARCHAR(100) PRIMARY KEY,  
@@ -103,9 +105,7 @@ export const initializeDB = async () => {
     );
 
     if (admin.length === 0) {
-      const password = process.env.ADMIN_PASSWORD || "";
-      const adminEmail = process.env.ADMIN_EMAIL || "";
-      const adminPassword = await bcrypt.hash(password, 12);
+      const adminPassword = await bcrypt.hash(config.admin_password, 12);
       await pool.query(
         `INSERT INTO users (id, firstName, lastName, email, age, gender, phone, address, role, password) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
@@ -113,18 +113,18 @@ export const initializeDB = async () => {
           generateId(),
           "Admin",
           "User",
-          adminEmail,
+          config.admin_email,
           30,
-          "male",
-          "1234567890",
-          "Admin Address",
+          "Male",
+          "+1234567890",
+          "MedHelp Central Command",
           "admin",
           adminPassword,
         ]
       );
-      console.log("✅ Admin user seeded successfully.");
+      console.log("✅ Admin user seeded successfully into TiDB Cloud.");
     } else {
-      console.log("⚠️ Admin user already exists.");
+      console.log("⚠️ Admin user already exists in TiDB Cloud.");
     }
   } catch (error) {
     console.error("❌ Error during database initialization:", error.message);
