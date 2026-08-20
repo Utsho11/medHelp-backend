@@ -1,8 +1,10 @@
 import express from "express";
 import auth from "../middlewares/auth.js";
+import validateRequest from "../middlewares/validateRequest.js";
+import { HelpValidation } from "../validations/help.validation.js";
 import {
   completeHelpController,
-  getAllHeplpsController,
+  getAllHelpsController,
   getHelpByIdController,
   getHelpForVolunteerController,
   getPatientHelpHistoryController,
@@ -14,7 +16,14 @@ import {
 
 const router = express.Router();
 
-router.post("/post-for-help", seekHelpController);
+// Seek emergency help
+router.post(
+  "/post-for-help",
+  validateRequest(HelpValidation.seekHelpValidationSchema),
+  seekHelpController
+);
+
+// Volunteer routes
 router.get(
   "/get-running-services",
   auth("volunteer"),
@@ -28,16 +37,28 @@ router.get(
 router.put(
   "/update-help-status",
   auth("volunteer"),
+  validateRequest(HelpValidation.updateHelpStatusValidationSchema),
   updateHelpStatusController
 );
-router.put("/complete-help", auth("volunteer"), completeHelpController);
-router.get("/:helpId", auth("volunteer"), getHelpByIdController);
+router.put(
+  "/complete-help",
+  auth("volunteer"),
+  validateRequest(HelpValidation.completeHelpValidationSchema),
+  completeHelpController
+);
 router.get("/services/history", auth("volunteer"), getServiceHistoryController);
+
+// Patient routes
 router.get(
   "/patient/history",
   auth("patient"),
   getPatientHelpHistoryController
 );
-router.get("/admin/all-helps", auth("admin"), getAllHeplpsController);
+
+// Admin routes
+router.get("/admin/all-helps", auth("admin"), getAllHelpsController);
+
+// Detail route
+router.get("/:helpId", auth("volunteer", "admin", "patient"), getHelpByIdController);
 
 export default router;

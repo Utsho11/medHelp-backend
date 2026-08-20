@@ -1,12 +1,14 @@
 import db from "../config/db.js";
 import { generateId } from "../utils/generateId.js";
 import { haversineDistance } from "../utils/haversineDistance.js";
+import AppError from "../middlewares/AppError.js";
+import status from "http-status";
 
-export const seekHelp = async (latitude, longitude, patient_id) => {
+export const seekHelp = async ({ latitude, longitude, patient_id }) => {
   const query = `
-      INSERT INTO helps (id, patient_id, latitude, longitude)
-      VALUES (?, ?, ?, ?);
-    `;
+    INSERT INTO helps (id, patient_id, latitude, longitude, status)
+    VALUES (?, ?, ?, ?, 'pending');
+  `;
 
   try {
     const helpId = generateId();
@@ -17,7 +19,7 @@ export const seekHelp = async (latitude, longitude, patient_id) => {
       longitude,
     ]);
 
-    return { id: helpId, affectedRows: result.affectedRows };
+    return { id: helpId, status: "pending", affectedRows: result.affectedRows };
   } catch (error) {
     console.error("❌ Error seeking help:", error.message);
     throw error;
@@ -28,245 +30,285 @@ export const getHelps = async () => {
   const query = `
     SELECT 
       helps.*,
-      CONCAT(users.firstName, ' ', users.lastName) AS volunteerName
+      CONCAT(patient.firstName, ' ', patient.lastName) AS patientName,
+      patient.phone AS patientPhone,
+      CONCAT(volunteer.firstName, ' ', volunteer.lastName) AS volunteerName,
+      volunteer.phone AS volunteerPhone
     FROM helps
-    LEFT JOIN users ON helps.volunteer_id = users.id
+    LEFT JOIN users AS patient ON helps.patient_id = patient.id
+    LEFT JOIN users AS volunteer ON helps.volunteer_id = volunteer.id
+    ORDER BY helps.created_at DESC
   `;
 
-  try {
-    const [rows] = await db.query(query);
-    return rows;
-  } catch (error) {
-    console.error("❌ Error retrieving helps:", error.message);
-    throw error;
-  }
+  const [rows] = await db.query(query);
+  return rows;
 };
 
 export const getHelpForVolunteer = async (volunteerId) => {
+  if (!volunteerId) {
+    throw new AppError(status.BAD_REQUEST, "Missing volunteer ID parameter");
+  }
+
+  // Get volunteer's current location
+  const [volunteerLocation] = await db.query(
+    `
+      SELECT latitude, longitude, is_available
+      FROM volunteer_availability
+      WHERE volunteer_id = ?
+    `,
+    [volunteerId]
+  );
+
+  if (!volunteerLocation || volunteerLocation.length === 0) {
+    return [];
+  }
+
+  const { latitude: volunteerLat, longitude: volunteerLon } = volunteerLocation[0];
+
+  if (!volunteerLat || !volunteerLon) {
+    return [];
+  }
+
+  const vLat = parseFloat(volunteerLat);
+  const vLon = parseFloat(volunteerLon);
+
   try {
-    // Validate volunteerId
-    if (!volunteerId) {
-      throw new Error("Missing volunteerId parameter");
-    }
+    // High-performance MySQL Spatial query (ST_Distance_Sphere calculates distance in meters)
+    const spatialQuery = `
+      SELECT 
+        h.id, h.patient_id, h.latitude, h.longitude, h.status, h.created_at,
+        CONCAT(u.firstName, ' ', u.lastName) AS patientName,
+        u.phone AS patientPhone,
+        u.address AS patientAddress,
+        ROUND(ST_Distance_Sphere(point(h.longitude, h.latitude), point(?, ?)) / 1000, 2) AS distance_km
+      FROM helps h
+      LEFT JOIN users u ON h.patient_id = u.id
+      WHERE h.status = 'pending'
+        AND ST_Distance_Sphere(point(h.longitude, h.latitude), point(?, ?)) <= 10000
+      ORDER BY distance_km ASC
+    `;
 
-    // Get volunteer's current location
-    const [volunteerLocation] = await db.query(
-      `
-        SELECT latitude, longitude
-        FROM volunteer_availability
-        WHERE volunteer_id = ?
-      `,
-      [volunteerId]
-    );
+    const [rows] = await db.query(spatialQuery, [vLon, vLat, vLon, vLat]);
+    return rows;
+  } catch (spatialErr) {
+    console.warn("⚠️ Spatial query fallback to Haversine calculation:", spatialErr.message);
 
-    if (!volunteerLocation || volunteerLocation.length === 0) {
-      return { error: "Volunteer location not found" };
-    }
-
-    const { latitude: volunteerLat, longitude: volunteerLon } =
-      volunteerLocation[0];
-
-    // Validate coordinates
-    if (!volunteerLat || !volunteerLon) {
-      return { error: "Invalid volunteer location coordinates" };
-    }
-
-    // Get all pending help requests
+    // Fallback using Haversine formula
     const [helps] = await db.query(`
-      SELECT id, patient_id, latitude, longitude, status
-      FROM helps
-      WHERE status = 'pending'
+      SELECT 
+        h.id, h.patient_id, h.latitude, h.longitude, h.status, h.created_at,
+        CONCAT(u.firstName, ' ', u.lastName) AS patientName,
+        u.phone AS patientPhone,
+        u.address AS patientAddress
+      FROM helps h
+      LEFT JOIN users u ON h.patient_id = u.id
+      WHERE h.status = 'pending'
+      ORDER BY h.created_at DESC
     `);
 
-    if (!helps) {
-      return { error: "No pending help requests found" };
-    }
-
-    // Filter helps within 5km
-    const nearbyHelps = helps.filter((help) => {
-      try {
-        const distance = haversineDistance(
-          parseFloat(volunteerLat),
-          parseFloat(volunteerLon),
+    const nearbyHelps = (helps || [])
+      .map((help) => {
+        const dist = haversineDistance(
+          vLat,
+          vLon,
           parseFloat(help.latitude),
           parseFloat(help.longitude)
         );
-        return distance <= 5;
-      } catch (filterError) {
-        console.error("Error calculating distance:", filterError.message);
-        return false; // Skip this help request if distance calculation fails
-      }
-    });
+        return { ...help, distance_km: Number(dist.toFixed(2)) };
+      })
+      .filter((help) => help.distance_km <= 10)
+      .sort((a, b) => a.distance_km - b.distance_km);
 
-    return nearbyHelps.length
-      ? nearbyHelps
-      : { message: "No help requests within 5 km" };
-  } catch (error) {
-    console.error("Error in getHelpForVolunteer:", error.message);
-    throw new Error(
-      error.message || "Failed to fetch help requests for volunteer"
-    );
+    return nearbyHelps;
   }
 };
 
+// Update help status with SQL Transaction
 export const updateHelpStatus = async (helpId, volunteerId) => {
+  const connection = await db.getConnection();
   try {
-    // Step 1: Check if the help is still pending
-    const [helps] = await db.query(`SELECT status FROM helps WHERE id = ?`, [
-      helpId,
-    ]);
+    await connection.beginTransaction();
 
-    // console.log(helpId, volunteerId, status);
+    const [helps] = await connection.query(
+      `SELECT status FROM helps WHERE id = ? FOR UPDATE`,
+      [helpId]
+    );
 
     if (helps.length === 0) {
-      return { success: false, message: "Help not found." };
+      await connection.rollback();
+      throw new AppError(status.NOT_FOUND, "Help request not found.");
     }
 
     const help = helps[0];
 
     if (help.status === "assigned" || help.status === "completed") {
-      return { success: false, message: "Help is no longer available." };
+      await connection.rollback();
+      throw new AppError(
+        status.CONFLICT,
+        "Help request has already been assigned or completed."
+      );
     }
 
-    // Step 2: Assign the volunteer and update status
-    await db.query(
+    // Assign the volunteer and update status
+    await connection.query(
       `UPDATE helps 
        SET status = 'assigned', volunteer_id = ?, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ?`,
       [volunteerId, helpId]
     );
 
-    // Step 3: Update the volunteer's availability status to 'inService'
-    await db.query(
+    // Update volunteer availability to inService
+    await connection.query(
       `UPDATE volunteer_availability 
        SET is_available = 'inService', updated_at = CURRENT_TIMESTAMP 
        WHERE volunteer_id = ?`,
       [volunteerId]
     );
 
+    await connection.commit();
     return { success: true, message: "Help assigned successfully." };
   } catch (error) {
-    console.error("❌ Error updating help status:", error.message);
-    return { success: false, message: "Server error." };
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
 };
 
+// Complete help with SQL Transaction
 export const completeHelp = async (helpId, volunteerId) => {
+  const connection = await db.getConnection();
   try {
-    // Step 1: Check if the help is still pending
-    const [helps] = await db.query(`SELECT status FROM helps WHERE id = ?`, [
-      helpId,
-    ]);
+    await connection.beginTransaction();
 
-    // console.log(helpId, volunteerId, status);
+    const [helps] = await connection.query(
+      `SELECT status, volunteer_id FROM helps WHERE id = ? FOR UPDATE`,
+      [helpId]
+    );
 
     if (helps.length === 0) {
-      return { success: false, message: "Help not found." };
+      await connection.rollback();
+      throw new AppError(status.NOT_FOUND, "Help request not found.");
     }
 
     const help = helps[0];
 
-    if (help.status === "pending" || help.status === "completed") {
-      return { success: false, message: "Help is no longer available." };
+    if (help.status !== "assigned") {
+      await connection.rollback();
+      throw new AppError(
+        status.BAD_REQUEST,
+        `Cannot complete help request with status: ${help.status}`
+      );
     }
 
-    // Step 2: Assign the volunteer and update status
-    await db.query(
+    if (volunteerId && help.volunteer_id !== volunteerId) {
+      await connection.rollback();
+      throw new AppError(
+        status.FORBIDDEN,
+        "You are not assigned to this help request."
+      );
+    }
+
+    // Mark completed
+    await connection.query(
       `UPDATE helps 
-       SET status = 'completed', volunteer_id = ?, updated_at = CURRENT_TIMESTAMP 
+       SET status = 'completed', updated_at = CURRENT_TIMESTAMP 
        WHERE id = ?`,
-      [volunteerId, helpId]
+      [helpId]
     );
 
-    // Step 3: Update the volunteer's availability status to 'inService'
-    await db.query(
-      `UPDATE volunteer_availability 
-       SET is_available = 'available', updated_at = CURRENT_TIMESTAMP 
-       WHERE volunteer_id = ?`,
-      [volunteerId]
-    );
+    // Reset volunteer availability to available
+    const targetVolunteerId = volunteerId || help.volunteer_id;
+    if (targetVolunteerId) {
+      await connection.query(
+        `UPDATE volunteer_availability 
+         SET is_available = 'available', updated_at = CURRENT_TIMESTAMP 
+         WHERE volunteer_id = ?`,
+        [targetVolunteerId]
+      );
+    }
 
+    await connection.commit();
     return { success: true, message: "Help completed successfully." };
   } catch (error) {
-    console.error("❌ Error updating help status:", error.message);
-    return { success: false, message: "Server error." };
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
 };
 
 export const getHelpById = async (helpId) => {
-  try {
-    const [helps] = await db.query(`SELECT * FROM helps WHERE id = ?`, [
-      helpId,
-    ]);
+  const [helps] = await db.query(
+    `SELECT 
+       h.*,
+       CONCAT(p.firstName, ' ', p.lastName) AS patientName,
+       p.phone AS patientPhone,
+       CONCAT(v.firstName, ' ', v.lastName) AS volunteerName,
+       v.phone AS volunteerPhone
+     FROM helps h
+     LEFT JOIN users p ON h.patient_id = p.id
+     LEFT JOIN users v ON h.volunteer_id = v.id
+     WHERE h.id = ?`,
+    [helpId]
+  );
 
-    if (helps.length === 0) {
-      return { error: "Help not found." };
-    }
-
-    return helps[0];
-  } catch (error) {
-    console.error("❌ Error fetching help by ID:", error.message);
-    throw new Error("Failed to fetch help.");
+  if (helps.length === 0) {
+    throw new AppError(status.NOT_FOUND, "Help request not found.");
   }
+
+  return helps[0];
 };
 
 export const getRunningServices = async (volunteerId) => {
-  try {
-    console.log("Fetching running services for volunteer:", volunteerId);
+  const [services] = await db.query(
+    `SELECT 
+       h.*,
+       CONCAT(p.firstName, ' ', p.lastName) AS patientName,
+       p.phone AS patientPhone,
+       p.address AS patientAddress
+     FROM helps h
+     LEFT JOIN users p ON h.patient_id = p.id
+     WHERE h.volunteer_id = ? AND h.status = 'assigned'`,
+    [volunteerId]
+  );
 
-    const [services] = await db.query(
-      `SELECT * FROM helps WHERE volunteer_id = ? AND status = 'assigned'`,
-      [volunteerId]
-    );
-
-    if (services.length === 0) {
-      return { message: "No running services." };
-    }
-
-    console.log(services);
-
-    return services;
-  } catch (error) {
-    console.error("❌ Error fetching running services:", error.message);
-    throw new Error("Failed to fetch running services.");
-  }
+  return services;
 };
 
 export const getServiceHistory = async (volunteerId) => {
-  console.log("Fetching service history for volunteer:", volunteerId);
-  try {
-    const [history] = await db.query(
-      `SELECT * FROM helps WHERE volunteer_id = ? AND status = 'completed'`,
-      [volunteerId]
-    );
+  const [history] = await db.query(
+    `SELECT 
+       h.*,
+       CONCAT(p.firstName, ' ', p.lastName) AS patientName,
+       p.phone AS patientPhone
+     FROM helps h
+     LEFT JOIN users p ON h.patient_id = p.id
+     WHERE h.volunteer_id = ? AND h.status = 'completed'
+     ORDER BY h.updated_at DESC`,
+    [volunteerId]
+  );
 
-    if (history.length === 0) {
-      return { message: "No service history." };
-    }
-
-    return history;
-  } catch (error) {
-    console.error("❌ Error fetching service history:", error.message);
-    throw new Error("Failed to fetch service history.");
-  }
+  return history;
 };
 
-export const getPatientHelpHistory = async (p_id) => {
-  try {
-    const query = `
-      SELECT 
-        CONCAT(u.firstName, ' ', u.lastName) AS volunteerName,
-        h.created_at AS helpDate
-      FROM helps h
-      LEFT JOIN users u ON h.volunteer_id = u.id
-      WHERE h.patient_id = ?
-      ORDER BY h.created_at DESC
-    `;
+export const getPatientHelpHistory = async (patientId) => {
+  const query = `
+    SELECT 
+      h.id,
+      h.status,
+      h.latitude,
+      h.longitude,
+      CONCAT(u.firstName, ' ', u.lastName) AS volunteerName,
+      u.phone AS volunteerPhone,
+      h.created_at AS helpDate,
+      h.updated_at AS completedDate
+    FROM helps h
+    LEFT JOIN users u ON h.volunteer_id = u.id
+    WHERE h.patient_id = ?
+    ORDER BY h.created_at DESC
+  `;
 
-    const [rows] = await db.query(query, [p_id]);
-    return rows;
-  } catch (error) {
-    console.error("❌ Error fetching help by ID:", error.message);
-    throw new Error("Failed to fetch help.");
-  }
+  const [rows] = await db.query(query, [patientId]);
+  return rows;
 };

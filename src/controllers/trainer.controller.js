@@ -1,3 +1,6 @@
+import status from "http-status";
+import catchAsync from "../utils/catchAsync.js";
+import sendResponse from "../utils/sendResponse.js";
 import {
   createTrainer,
   deleteTrainerById,
@@ -5,44 +8,40 @@ import {
   getTrainers,
 } from "../models/trainer.model.js";
 
-// Create new user
-export const createTrainerController = async (req, res) => {
-  try {
-    await createTrainer(req);
-    res.status(201).json({ message: "Trainer created successfully" });
-  } catch (error) {
-    console.error("Error creating user:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const createTrainerController = catchAsync(async (req, res) => {
+  const result = await createTrainer(req.body);
+  sendResponse(res, {
+    statusCode: status.CREATED,
+    message: "Trainer created successfully",
+    data: result,
+  });
+});
 
-// Get all users
-export const getTrainerController = async (req, res) => {
-  try {
-    const result = await getTrainers();
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const getTrainerController = catchAsync(async (req, res) => {
+  const result = await getTrainers();
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Trainers retrieved successfully",
+    data: result,
+  });
+});
 
-export const editTrainerController = async (req, res) => {
-  try {
-    const result = await editTrainerById(req);
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const editTrainerController = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const result = await editTrainerById(id, req.body);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Trainer updated successfully",
+    data: result,
+  });
+});
 
-export const deleteTrainerController = async (req, res) => {
-  try {
-    const result = await deleteTrainerById(req);
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const deleteTrainerController = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const result = await deleteTrainerById(id);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Trainer deleted successfully",
+    data: result,
+  });
+});

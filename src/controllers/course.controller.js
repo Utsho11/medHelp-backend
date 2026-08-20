@@ -1,3 +1,6 @@
+import status from "http-status";
+import catchAsync from "../utils/catchAsync.js";
+import sendResponse from "../utils/sendResponse.js";
 import {
   createCourse,
   createEnrollment,
@@ -8,76 +11,71 @@ import {
   updateCourse,
 } from "../models/course.model.js";
 
-// Create new user
-export const createCourseController = async (req, res) => {
-  try {
-    await createCourse(req);
-    res.status(201).json({ message: "Course created successfully" });
-  } catch (error) {
-    console.error("Error creating user:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const createCourseController = catchAsync(async (req, res) => {
+  const result = await createCourse(req.body);
+  sendResponse(res, {
+    statusCode: status.CREATED,
+    message: "Course created successfully",
+    data: result,
+  });
+});
 
-export const createEnrollmentController = async (req, res) => {
-  try {
-    await createEnrollment(req);
-    res.status(201).json({ message: "Enrollment successfull" });
-  } catch (error) {
-    console.error("Error creating user:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-export const getCourseController = async (req, res) => {
-  try {
-    const result = await getCourses();
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const createEnrollmentController = catchAsync(async (req, res) => {
+  const { courseId } = req.body;
+  const studentId = req.user.id;
 
-export const updateCourseController = async (req, res) => {
-  try {
-    const result = await updateCourse(req);
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+  const result = await createEnrollment({ courseId, studentId });
+  sendResponse(res, {
+    statusCode: status.CREATED,
+    message: "Enrollment successful",
+    data: result,
+  });
+});
 
-export const deleteCourseController = async (req, res) => {
-  try {
-    const { id } = req.params;
-    // console.log(id);
+export const getCourseController = catchAsync(async (req, res) => {
+  const result = await getCourses();
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Courses retrieved successfully",
+    data: result,
+  });
+});
 
-    const result = await deleteCourse(id);
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-export const getCoursesByVolunteerController = async (req, res) => {
-  try {
-    const v_id = req.user.id;
+export const updateCourseController = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const result = await updateCourse(id, req.body);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Course updated successfully",
+    data: result,
+  });
+});
 
-    const result = await getCoursesByVolunteer(v_id);
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const deleteCourseController = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const result = await deleteCourse(id);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Course deleted successfully",
+    data: result,
+  });
+});
 
-export const getCourseEnrollmentInfoController = async (req, res) => {
-  try {
-    const result = await getCourseEnrollmentInfo();
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const getCoursesByVolunteerController = catchAsync(async (req, res) => {
+  const volunteerId = req.user.id;
+  const result = await getCoursesByVolunteer(volunteerId);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Volunteer enrolled courses retrieved successfully",
+    data: result,
+  });
+});
+
+export const getCourseEnrollmentInfoController = catchAsync(async (req, res) => {
+  const result = await getCourseEnrollmentInfo();
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Course enrollment statistics retrieved successfully",
+    data: result,
+  });
+});

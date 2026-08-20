@@ -1,54 +1,38 @@
 import db from "../config/db.js";
 import { generateId } from "../utils/generateId.js";
+import AppError from "../middlewares/AppError.js";
+import status from "http-status";
 
-export const createCourse = async (req) => {
-  const { courseName, trainer, startDate, duration } = req.body;
-
+export const createCourse = async ({ courseName, trainer, startDate, duration }) => {
   const query = `
-        INSERT INTO courses (
-          id, courseName, trainer, startDate, duration
-        ) VALUES (?, ?, ?, ?, ?);
-      `;
+    INSERT INTO courses (
+      id, courseName, trainer, startDate, duration
+    ) VALUES (?, ?, ?, ?, ?);
+  `;
 
-  try {
-    const courseId = generateId(); // Generate a unique ID
+  const courseId = generateId();
+  const [result] = await db.execute(query, [
+    courseId,
+    courseName,
+    trainer,
+    startDate,
+    duration,
+  ]);
 
-    // Execute the query
-    const [result] = await db.execute(query, [
-      courseId,
-      courseName,
-      trainer,
-      startDate,
-      duration,
-    ]);
-
-    return { id: courseId, affectedRows: result.affectedRows };
-  } catch (error) {
-    console.error("❌ Error creating course:", error.message);
-    throw error;
-  }
+  return { id: courseId, affectedRows: result.affectedRows };
 };
 
-export const createEnrollment = async (req) => {
-  const { courseId } = req.body;
-  const studentId = req.user.id;
-
+export const createEnrollment = async ({ courseId, studentId }) => {
   const query = `
     INSERT INTO enrollments (
       id, course_id, student_id
     ) VALUES (?, ?, ?);
   `;
 
-  try {
-    const id = generateId(); // Generate a unique ID
+  const id = generateId();
+  const [result] = await db.execute(query, [id, courseId, studentId]);
 
-    const [result] = await db.execute(query, [id, courseId, studentId]);
-
-    return { id, affectedRows: result.affectedRows };
-  } catch (error) {
-    console.error("❌ Error creating enrollment:", error.message);
-    throw error;
-  }
+  return { id, affectedRows: result.affectedRows };
 };
 
 export const getCourses = async () => {
@@ -62,125 +46,92 @@ export const getCourses = async () => {
       trainers.fullname AS trainerName, 
       trainers.email AS trainerEmail
     FROM courses
-    JOIN trainers ON courses.trainer = trainers.id;
+    JOIN trainers ON courses.trainer = trainers.id
+    ORDER BY courses.created_at DESC;
   `;
 
-  try {
-    const [rows] = await db.execute(query);
-    return rows;
-  } catch (error) {
-    console.error("❌ Error retrieving courses:", error.message);
-    throw error;
-  }
+  const [rows] = await db.execute(query);
+  return rows;
 };
 
 // Update course by ID
-export const updateCourse = async (req) => {
-  const { id } = req.params;
-  const { courseName, trainer, startDate, duration } = req.body;
+export const updateCourse = async (id, updateData) => {
+  const { courseName, trainer, startDate, duration } = updateData;
 
-  // Fetch current course details to preserve unprovided fields
   const [existingRows] = await db.execute(
     "SELECT * FROM courses WHERE id = ?",
     [id]
   );
 
   if (existingRows.length === 0) {
-    throw new Error("No course found with the specified ID");
+    throw new AppError(status.NOT_FOUND, "No course found with the specified ID");
   }
 
-  const currentCourse = existingRows[0];
-
-  // Build the update dynamically based on provided fields
   const updates = {};
   if (courseName !== undefined) updates.courseName = courseName;
   if (trainer !== undefined) updates.trainer = trainer;
   if (startDate !== undefined) updates.startDate = startDate;
   if (duration !== undefined) updates.duration = duration;
 
-  // If no fields to update, return early
   if (Object.keys(updates).length === 0) {
     return { id, affectedRows: 0, message: "No fields provided to update" };
   }
 
-  // Construct the dynamic SQL query
   const setClause = Object.keys(updates)
     .map((key) => `${key} = ?`)
     .join(", ");
 
-  const query = `
-    UPDATE courses 
-    SET ${setClause}
-    WHERE id = ?;
-  `;
+  const query = `UPDATE courses SET ${setClause} WHERE id = ?;`;
+  const [result] = await db.execute(query, [...Object.values(updates), id]);
 
-  try {
-    const [result] = await db.execute(query, [...Object.values(updates), id]);
-
-    if (result.affectedRows === 0) {
-      throw new Error("No course found with the specified ID");
-    }
-
-    return { id, affectedRows: result.affectedRows };
-  } catch (error) {
-    console.error("❌ Error updating course:", error.message);
-    throw error;
-  }
+  return { id, affectedRows: result.affectedRows };
 };
 
 // Delete course by ID
 export const deleteCourse = async (courseId) => {
   const query = `DELETE FROM courses WHERE id = ?;`;
+  const [result] = await db.execute(query, [courseId]);
 
-  try {
-    const [result] = await db.execute(query, [courseId]);
-    return { affectedRows: result.affectedRows };
-  } catch (error) {
-    console.error("❌ Error deleting course:", error.message);
-    throw error;
+  if (result.affectedRows === 0) {
+    throw new AppError(status.NOT_FOUND, "Course not found with specified ID");
   }
+
+  return { id: courseId, affectedRows: result.affectedRows };
 };
 
 export const getCoursesByVolunteer = async (volunteerId) => {
   const query = `
     SELECT 
+      e.id AS enrollmentId,
+      c.id AS courseId,
       c.courseName,
       t.fullname AS trainerName,
       c.startDate,
-      c.duration
+      c.duration,
+      e.enrollment_date
     FROM enrollments e
     JOIN courses c ON e.course_id = c.id
     JOIN trainers t ON c.trainer = t.id
     WHERE e.student_id = ?;
   `;
 
-  try {
-    const [rows] = await db.execute(query, [volunteerId]);
-    return rows;
-  } catch (error) {
-    console.error("❌ Error fetching courses by volunteer:", error.message);
-    throw error;
-  }
+  const [rows] = await db.execute(query, [volunteerId]);
+  return rows;
 };
 
 export const getCourseEnrollmentInfo = async () => {
-  try {
-    const [rows] = await db.query(`
-      SELECT 
-  c.courseName AS course_name,
-  c.startDate AS start_date,
-  c.duration AS duration_months,
-  COUNT(e.student_id) AS student_count
-FROM courses c
-LEFT JOIN enrollments e ON c.id = e.course_id
-GROUP BY c.id, c.courseName, c.startDate, c.duration;
+  const query = `
+    SELECT 
+      c.id AS course_id,
+      c.courseName AS course_name,
+      c.startDate AS start_date,
+      c.duration AS duration_months,
+      COUNT(e.student_id) AS student_count
+    FROM courses c
+    LEFT JOIN enrollments e ON c.id = e.course_id
+    GROUP BY c.id, c.courseName, c.startDate, c.duration;
+  `;
 
-    `);
-
-    // console.log("✅ Course enrollment info retrieved:", rows);
-    return rows;
-  } catch (error) {
-    console.error("❌ Error fetching course enrollment info:", error.message);
-    throw error;
-  }
+  const [rows] = await db.query(query);
+  return rows;
 };

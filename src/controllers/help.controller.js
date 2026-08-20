@@ -1,3 +1,6 @@
+import status from "http-status";
+import catchAsync from "../utils/catchAsync.js";
+import sendResponse from "../utils/sendResponse.js";
 import {
   completeHelp,
   getHelpById,
@@ -9,158 +12,140 @@ import {
   seekHelp,
   updateHelpStatus,
 } from "../models/help.model.js";
+import {
+  notifyHelpAssigned,
+  notifyHelpCompleted,
+  notifyNewHelpRequest,
+} from "../socket/socket.js";
 
-export const seekHelpController = async (req, res) => {
-  try {
-    const { latitude, longitude, patient_id } = req.body;
+export const seekHelpController = catchAsync(async (req, res) => {
+  const { latitude, longitude, patient_id } = req.body;
+  const targetPatientId = req.user ? req.user.id : patient_id;
 
-    // Fetch availability from the database
-    const result = await seekHelp(latitude, longitude, patient_id);
+  const result = await seekHelp({
+    latitude,
+    longitude,
+    patient_id: targetPatientId,
+  });
 
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+  // Real-time broadcast to all available volunteers
+  notifyNewHelpRequest({
+    helpId: result.id,
+    patientId: targetPatientId,
+    latitude,
+    longitude,
+    createdAt: new Date().toISOString(),
+  });
 
-export const getHelpForVolunteerController = async (req, res) => {
-  try {
-    const volunteerId = req.user?.id;
+  sendResponse(res, {
+    statusCode: status.CREATED,
+    message: "Emergency help request created and broadcast to nearby volunteers",
+    data: result,
+  });
+});
 
-    if (!volunteerId) {
-      return res.status(401).json({
-        success: false,
-        message: "Authentication required: No volunteer ID found",
-      });
-    }
+export const getHelpForVolunteerController = catchAsync(async (req, res) => {
+  const volunteerId = req.user.id;
+  const result = await getHelpForVolunteer(volunteerId);
 
-    const result = await getHelpForVolunteer(volunteerId);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Nearby help requests retrieved successfully",
+    data: result,
+  });
+});
 
-    // Handle different types of responses from the service
-    if (result?.error) {
-      return res.status(404).json({
-        success: false,
-        message: result.error,
-      });
-    }
+export const updateHelpStatusController = catchAsync(async (req, res) => {
+  const { helpId } = req.body;
+  const volunteer = req.user;
 
-    if (result?.message) {
-      return res.status(200).json({
-        success: true,
-        message: result.message,
-        data: [],
-      });
-    }
+  const result = await updateHelpStatus(helpId, volunteer.id);
 
-    res.status(200).json({
-      success: true,
-      message: "Help requests retrieved successfully",
-      data: result,
-    });
-  } catch (error) {
-    console.error("Error in getHelpForVolunteerController:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
+  // Real-time notification to emergency room and patient
+  const helpDetails = await getHelpById(helpId);
+  notifyHelpAssigned(helpId, {
+    volunteer: {
+      id: volunteer.id,
+      name: volunteer.name,
+      phone: volunteer.phone,
+    },
+    patientId: helpDetails.patient_id,
+  });
 
-export const updateHelpStatusController = async (req, res) => {
-  try {
-    const { helpId, volunteerId } = req.body;
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: result.message || "Help assigned successfully",
+    data: result,
+  });
+});
 
-    // Fetch availability from the database
-    const result = await updateHelpStatus(helpId, volunteerId);
+export const completeHelpController = catchAsync(async (req, res) => {
+  const { helpId } = req.body;
+  const volunteerId = req.user.id;
 
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error updating:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+  const helpDetails = await getHelpById(helpId);
+  const result = await completeHelp(helpId, volunteerId);
 
-export const completeHelpController = async (req, res) => {
-  try {
-    const { helpId, volunteerId } = req.body;
+  // Real-time notification that emergency is resolved
+  notifyHelpCompleted(helpId, helpDetails.patient_id);
 
-    // Fetch availability from the database
-    const result = await completeHelp(helpId, volunteerId);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: result.message || "Help marked as completed",
+    data: result,
+  });
+});
 
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error updating:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-export const getHelpByIdController = async (req, res) => {
-  try {
-    const { helpId, status } = req.params;
+export const getHelpByIdController = catchAsync(async (req, res) => {
+  const { helpId } = req.params;
+  const result = await getHelpById(helpId);
 
-    // Fetch availability from the database
-    const result = await getHelpById(helpId, status);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Help details retrieved successfully",
+    data: result,
+  });
+});
 
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const getRunningServicesController = catchAsync(async (req, res) => {
+  const volunteerId = req.user.id;
+  const result = await getRunningServices(volunteerId);
 
-export const getRunningServicesController = async (req, res) => {
-  try {
-    const volunteerId = req.user?.id;
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Running services retrieved successfully",
+    data: result,
+  });
+});
 
-    // Fetch availability from the database
-    const result = await getRunningServices(volunteerId);
+export const getServiceHistoryController = catchAsync(async (req, res) => {
+  const volunteerId = req.user.id;
+  const result = await getServiceHistory(volunteerId);
 
-    console.log(result);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Service history retrieved successfully",
+    data: result,
+  });
+});
 
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const getPatientHelpHistoryController = catchAsync(async (req, res) => {
+  const patientId = req.user.id;
+  const result = await getPatientHelpHistory(patientId);
 
-export const getServiceHistoryController = async (req, res) => {
-  try {
-    const volunteerId = req.user?.id;
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Patient help history retrieved successfully",
+    data: result,
+  });
+});
 
-    // Fetch availability from the database
-    const result = await getServiceHistory(volunteerId);
+export const getAllHelpsController = catchAsync(async (req, res) => {
+  const result = await getHelps();
 
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-export const getPatientHelpHistoryController = async (req, res) => {
-  try {
-    const p_id = req.user?.id;
-
-    // Fetch availability from the database
-    const result = await getPatientHelpHistory(p_id);
-
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-export const getAllHeplpsController = async (req, res) => {
-  try {
-    // Fetch availability from the database
-    const result = await getHelps();
-
-    res.status(200).json(result);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "All help records retrieved successfully",
+    data: result,
+  });
+});

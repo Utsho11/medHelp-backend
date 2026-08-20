@@ -1,3 +1,6 @@
+import status from "http-status";
+import catchAsync from "../utils/catchAsync.js";
+import sendResponse from "../utils/sendResponse.js";
 import {
   createUser,
   deleteUser,
@@ -9,95 +12,87 @@ import {
 } from "../models/user.model.js";
 
 // Create new user
-export const createUserController = async (req, res) => {
-  try {
-    await createUser(req);
-    res.status(201).json({ message: "User created successfully" });
-  } catch (error) {
-    console.error("Error creating user:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+export const createUserController = catchAsync(async (req, res) => {
+  const result = await createUser(req.body);
+  sendResponse(res, {
+    statusCode: status.CREATED,
+    message: "User created successfully",
+    data: result,
+  });
+});
 
-// Get all users
-export const getUsersController = async (req, res) => {
-  try {
-    const users = await getUsers(req);
-    res.status(200).json(users);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+// Get all users by role
+export const getUsersController = catchAsync(async (req, res) => {
+  const { role } = req.query;
+  const users = await getUsers(role);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Users retrieved successfully",
+    data: users,
+  });
+});
 
-export const deleteUsersController = async (req, res) => {
-  try {
-    await deleteUser(req);
-    res.status(200).json({
-      message: "User deleted successfully",
-    });
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+// Delete User
+export const deleteUsersController = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const result = await deleteUser(id);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "User deleted successfully",
+    data: result,
+  });
+});
 
-export const toggleUserStatusController = async (req, res) => {
-  try {
-    await toggleBlockStatus(req);
-    res.status(200).json({
-      message: "User status is changed successfully",
-    });
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+// Toggle Block Status
+export const toggleUserStatusController = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const result = await toggleBlockStatus(id);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: `User status changed to ${result.isBlocked ? "blocked" : "active"}`,
+    data: result,
+  });
+});
 
-export const volunteerAvailabilityController = async (req, res) => {
-  try {
-    const { isAvailable, latitude, longitude } = req.body;
-    const volunteerId = req.user.id;
+// Volunteer availability update
+export const volunteerAvailabilityController = catchAsync(async (req, res) => {
+  const { isAvailable, latitude, longitude } = req.body;
+  const volunteerId = req.user.id;
 
-    // Update availability in the database
-    await updateVolunteerAvailability(
-      volunteerId,
-      isAvailable,
-      latitude,
-      longitude
-    );
+  const result = await updateVolunteerAvailability(
+    volunteerId,
+    isAvailable,
+    latitude,
+    longitude
+  );
 
-    res.status(200).json({ message: "Availability updated successfully" });
-  } catch (error) {
-    console.error("Error updating availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Availability updated successfully",
+    data: result,
+  });
+});
 
-export const getVolunteerAvailabilityController = async (req, res) => {
-  try {
-    const volunteerId = req.user.id;
+// Get Volunteer availability
+export const getVolunteerAvailabilityController = catchAsync(async (req, res) => {
+  const volunteerId = req.user.id;
+  const availability = await getVolunteerAvailability(volunteerId);
 
-    // Fetch availability from the database
-    const availability = await getVolunteerAvailability(volunteerId);
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Availability retrieved successfully",
+    data: availability,
+  });
+});
 
-    res.status(200).json(availability);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+// Get Volunteer statistics
+export const getVolunteerStatsByIdController = catchAsync(async (req, res) => {
+  const volunteerId = req.user.id;
+  const stats = await getVolunteerStatsById(volunteerId);
 
-export const getVolunteerStatsByIdController = async (req, res) => {
-  try {
-    const volunteerId = req.user.id;
-
-    // Fetch availability from the database
-    const availability = await getVolunteerStatsById(volunteerId);
-
-    res.status(200).json(availability);
-  } catch (error) {
-    console.error("Error fetching availability:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
+  sendResponse(res, {
+    statusCode: status.OK,
+    message: "Volunteer stats retrieved successfully",
+    data: stats,
+  });
+});
