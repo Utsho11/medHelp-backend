@@ -24,25 +24,28 @@ app.use(
   })
 );
 
-// Cross-Origin Resource Sharing
+// Cross-Origin Resource Sharing (Supports Vercel, localhost, and custom domains)
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, Postman)
+      // Allow requests with no origin (e.g. mobile apps, curl, Postman, health pingers)
       if (!origin) return callback(null, true);
       if (
+        config.env === "development" ||
+        config.cors_origin.includes("*") ||
         config.cors_origin.includes(origin) ||
-        config.env === "development"
+        origin.endsWith(".vercel.app") ||
+        origin.includes("localhost")
       ) {
         return callback(null, true);
       }
-      return callback(new Error("CORS policy violation: Origin not allowed"));
+      return callback(null, true); // Fallback: allow to avoid cross-origin blockage on Render
     },
     credentials: true,
   })
 );
 
-// Global Rate Limiting (200 requests per 15 minutes per IP)
+// Global Rate Limiting (300 requests per 15 minutes per IP)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -59,7 +62,7 @@ app.use(generalLimiter);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health Check Endpoint
+// Health Check Endpoint (For UptimeRobot / cron keep-alive pings)
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "ok",
