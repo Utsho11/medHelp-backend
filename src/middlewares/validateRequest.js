@@ -1,15 +1,17 @@
 const validateRequest = (schema) => {
   return async (req, res, next) => {
     try {
-      if (schema.body && req.body) {
-        req.body = await schema.body.parseAsync(req.body);
-      }
-      if (schema.query && req.query) {
-        req.query = await schema.query.parseAsync(req.query);
-      }
-      if (schema.params && req.params) {
-        req.params = await schema.params.parseAsync(req.params);
-      }
+      const parsed = await schema.parseAsync({
+        body: req.body,
+        query: req.query,
+        params: req.params,
+        cookies: req.cookies,
+      });
+
+      if (parsed.body !== undefined) req.body = parsed.body;
+      if (parsed.query !== undefined) req.query = parsed.query;
+      if (parsed.params !== undefined) req.params = parsed.params;
+
       next();
     } catch (error) {
       next(error);
